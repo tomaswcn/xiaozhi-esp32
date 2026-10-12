@@ -1,13 +1,16 @@
 #include "wifi_board.h"
 #include "display/lcd_display.h"
+#include "ai_passport_display.h"
 #include "codecs/es8311_audio_codec.h"
 #include "application.h"
 #include "button.h"
 #include "config.h"
 #include "assets/lang_config.h"
 #include "cw2017_battery_monitor.h"
+#include "power_save_timer.h"
 
 #include <esp_log.h>
+#include <esp_lvgl_port.h>
 #include <esp_lcd_panel_vendor.h>
 #include <button_adc.h>
 #include <esp_adc/adc_oneshot.h>
@@ -33,6 +36,7 @@ private:
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
     LcdDisplay* display_;
     Cw2017BatteryMonitor* battery_;
+    PowerSaveTimer* power_save_timer_ = nullptr;
 
     void InitializeCodecI2c() {
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -139,6 +143,32 @@ private:
         });
     }
 
+    void InitializePowerSaveTimer() {
+        // AI Passport 省电链（息屏 60s）：
+        //   - CPU 由 160MHz 降到 40MHz（PowerSaveTimer 框架自动设 min_freq + light sleep）
+        //   - 背光滑到 0（息屏）
+        //   - 暂停 LVGL 端口任务（停止刷新心跳，防死锁）
+        // 路径 B：息屏【保留】麦克风与唤醒词引擎，语音仍可唤醒（唤醒词中断 → 应用状态变化
+        //   → SetPowerSaveLevel(NORMAL) → WakeUp() 还原亮度与 LVGL）。故关闭框架默认的"息屏关麦"。
+        power_save_timer_ = new PowerSaveTimer(160, 60, -1);
+        power_save_timer_->SetDisableAudioInSleep(false);
+        power_save_timer_->OnEnterSleepMode([this]() {
+            Application::GetInstance().Schedule([this]() {
+                GetBacklight()->SetBrightness(0);
+                GetDisplay()->SetPowerSaveMode(true);
+                lvgl_port_stop();
+            });
+        });
+        power_save_timer_->OnExitSleepMode([this]() {
+            Application::GetInstance().Schedule([this]() {
+                lvgl_port_resume();
+                GetDisplay()->SetPowerSaveMode(false);
+                GetBacklight()->RestoreBrightness();
+            });
+        });
+        power_save_timer_->SetEnabled(true);
+    }
+
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_SPI_MOSI_PIN;
@@ -210,10 +240,10 @@ private:
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel, true);
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
-                                     DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
-                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        display_ = new AiPassportDisplay(panel_io, panel,
+                                         DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                         DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+                                         DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
 public:
@@ -222,6 +252,7 @@ public:
         InitializeSpi();
         InitializeDisplay();
         InitializeButtons();
+        InitializePowerSaveTimer();
         GetBacklight()->RestoreBrightness();
     }
 
@@ -264,6 +295,14 @@ public:
         charging = false;
         discharging = true;
         return true;
+    }
+
+    virtual void SetPowerSaveLevel(PowerSaveLevel level) override {
+        if (level != PowerSaveLevel::LOW_POWER) {
+            // 退出低功耗（开始对话/配网等）：唤醒并重置计时，避免立即再次息屏
+            power_save_timer_->WakeUp();
+        }
+        WifiBoard::SetPowerSaveLevel(level);
     }
 };
 

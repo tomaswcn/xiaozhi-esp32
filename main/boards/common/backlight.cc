@@ -32,7 +32,8 @@ Backlight::~Backlight() {
 void Backlight::RestoreBrightness() {
     // Load brightness from settings
     Settings settings("display");  
-    int saved_brightness = settings.GetInt("brightness", 75);
+    // AI Passport 定制：默认亮度 30%
+    int saved_brightness = settings.GetInt("brightness", 30);
     
     // 检查亮度值是否为0或过小，设置默认值
     if (saved_brightness <= 0) {
