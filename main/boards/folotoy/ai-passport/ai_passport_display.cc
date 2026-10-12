@@ -38,7 +38,7 @@ void AiPassportDisplay::SetupUI() {
 
     // 把 battery_label_ 复用为 iOS 风格白色圆角胶囊：内嵌电量百分比。
     // 字体使用 UI 文本字体（本板内置 20px），保证数字可渲染且该字体一定已链接。
-    lv_obj_set_style_text_font(battery_label_, lv_obj_get_style_text_font(lv_screen_active(), 0), 0);
+    lv_obj_set_style_text_font(battery_label_, lv_obj_get_style_text_font(lv_screen_active(), LV_PART_MAIN), LV_PART_MAIN);
     lv_obj_set_style_text_color(battery_label_, lv_color_black(), 0);
 
     // 白色圆角胶囊背景（半径 9 近似全圆角；高度随字体自适应，避免裁切）。
